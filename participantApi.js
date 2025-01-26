@@ -33,4 +33,22 @@ router.post('/update-status', (req, res) => {
   res.json({ message: 'Status uppdaterad', taskId, status });
 });
 
+// Deltagarens dashboard
+router.get('/dashboard', (req, res) => {
+  // Hämta dashboard-information för en deltagare
+  res.json({ message: 'Deltagarens dashboard-data' });
+});
+
+// Hämta deltagarens uppgifter
+router.get('/tasks', (req, res) => {
+  // Hämta lista på uppgifter för deltagaren
+  res.json([{ taskId: 1, taskName: 'Uppgift 1' }, { taskId: 2, taskName: 'Uppgift 2' }]);
+});
+
+// Uppdatera status för en uppgift
+router.post('/update-status', (req, res) => {
+  const { taskId, status } = req.body;
+  // Logik för att uppdatera status för en uppgift
+  res.json({ message: `Uppgift ${taskId} status uppdaterad till ${status}` });
+});
 module.exports = router;
