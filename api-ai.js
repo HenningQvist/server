@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const sqlite3 = require('sqlite3').verbose();
-const { trainModel, predictRecommendation } = require('./src/aiModel'); // Importera modellens funktioner
+const { trainModel, predictRecommendation } = require('./aiModel'); // Importera modellens funktioner
 const path = require('path');
 const fs = require('fs');
 
