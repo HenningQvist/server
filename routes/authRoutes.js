@@ -27,18 +27,24 @@ const loginLimiter = rateLimit({
 // Register
 router.post("/register", async (req, res) => {
   const { email, password, role } = req.body;
-  if (!email || !password || !role)
+  if (!email || !password || !role) {
+    console.error("❌ Register error: Saknas fält", { email, password, role });
     return res.status(400).json({ error: "Alla fält krävs" });
-  if (password.length < 8)
+  }
+  if (password.length < 8) {
+    console.error("❌ Register error: Lösenord för kort", { password });
     return res.status(400).json({ error: "Lösenord minst 8 tecken" });
+  }
 
   try {
     const existingUser = await pool.query(
       "SELECT * FROM users WHERE email=$1",
       [email]
     );
-    if (existingUser.rows.length > 0)
+    if (existingUser.rows.length > 0) {
+      console.error("❌ Register error: E-post finns redan", { email });
       return res.status(400).json({ error: "E-post finns redan" });
+    }
 
     const hashed = await bcrypt.hash(password, 12);
 
@@ -47,12 +53,13 @@ router.post("/register", async (req, res) => {
       [email, hashed, role]
     );
 
+    console.log("✅ Ny användare registrerad", result.rows[0]);
     res.status(201).json({
       message: "Registrering mottagen. Väntar på godkännande av coach.",
       user: result.rows[0],
     });
   } catch (err) {
-    console.error("❌ Register error:", err.message);
+    console.error("❌ Register error:", err);
     res.status(500).json({ error: "Serverfel" });
   }
 });
@@ -60,25 +67,35 @@ router.post("/register", async (req, res) => {
 // Login
 router.post("/login", loginLimiter, async (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password)
+  if (!email || !password) {
+    console.error("❌ Login error: Saknas email eller password", { email, password });
     return res.status(400).json({ error: "Email och lösenord krävs" });
+  }
 
   try {
     const result = await pool.query("SELECT * FROM users WHERE email=$1", [
       email,
     ]);
     const user = result.rows[0];
-    if (!user) return res.status(401).json({ error: "Felaktiga uppgifter" });
-    if (user.status !== "active")
+    if (!user) {
+      console.error("❌ Login error: Användare finns inte", { email });
+      return res.status(401).json({ error: "Felaktiga uppgifter" });
+    }
+    if (user.status !== "active") {
+      console.error("❌ Login error: Konto ej aktiverat", { email, status: user.status });
       return res
         .status(403)
         .json({ error: "Konto väntar på godkännande av coach" });
+    }
 
     const match = await bcrypt.compare(password, user.password_hash);
-    if (!match)
+    if (!match) {
+      console.error("❌ Login error: Felaktigt lösenord", { email });
       return res.status(401).json({ error: "Felaktiga uppgifter" });
+    }
 
     const token = createToken(user);
+    console.log("✅ Inloggning lyckades", { email, id: user.id });
     res
       .cookie("token", token, {
         httpOnly: true,
@@ -88,10 +105,11 @@ router.post("/login", loginLimiter, async (req, res) => {
       })
       .json({ message: "Inloggning lyckades", user: { id: user.id, email: user.email, role: user.role } });
   } catch (err) {
-    console.error("❌ Login error:", err.message);
+    console.error("❌ Login error:", err);
     res.status(500).json({ error: "Serverfel vid login" });
   }
 });
+
 
 // Logout
 router.post("/logout", (req, res) => {
