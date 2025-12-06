@@ -15,8 +15,13 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 
 // -------------------- Middleware --------------------
-const allowedOrigins = ["http://localhost:3000"];
+// Tillåt flera origin (lokal dev + Netlify frontend)
+const allowedOrigins = [
+  "http://localhost:3000",
+  "https://trailbyelements.netlify.app"
+];
 app.use(cors({ origin: allowedOrigins, credentials: true }));
+
 app.use(express.json());
 app.use(cookieParser());
 
@@ -57,8 +62,13 @@ app.get("/ping", (req, res) => res.json({ message: "Servern svarar!" }));
 // -------------------- HTTP + Socket.IO --------------------
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: "http://localhost:3000", credentials: true },
+  cors: {
+    origin: allowedOrigins,
+    credentials: true
+  }
 });
+
+
 
 // -------------------- Lobby-hantering --------------------
 let lobbies = {};
