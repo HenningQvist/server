@@ -1,0 +1,27 @@
+{
+  "name": "cv-builder",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "CV Builder app",
+  "author": "Ditt Namn",
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.2",
+    "pg": "^8.16.3",
+    "socket.io": "^4.8.1",
+    "uuid": "^13.0.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "main": "index.js",
+  "keywords": [],
+  "license": "ISC"
+}
