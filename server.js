@@ -2,9 +2,9 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import cookieParser from "cookie-parser";
 import { createServer } from "http";
 import { Server } from "socket.io";
-import jwt from "jsonwebtoken";
 
 import authRoutes from "./routes/authRoutes.js";
 import characterRoutes from "./routes/characterRouter.js";
@@ -14,31 +14,27 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// -------------------- CORS --------------------
+// -------------------- Middleware --------------------
+// Tillåt lokalt + produktion
 const allowedOrigins = [
-  "http://localhost:3000",                         // lokal frontend
-  "https://trailbyelements.netlify.app",           // Netlify
-  "https://server-production-e2e7.up.railway.app"  // Railway backend
+  "http://localhost:3000",
+  "https://server-production-e2e7.up.railway.app",
+  "https://trailbyelements.netlify.app/"
 ];
-
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
+app.use(cookieParser());
 
-// -------------------- JWT helpers --------------------
+import jwt from "jsonwebtoken";
 const JWT_SECRET = process.env.JWT_SECRET || "supersecret";
 
+// -------------------- Auth helpers --------------------
 export function authenticate(req, res, next) {
   let token = null;
-
-  // Token hämtas från Authorization-header
-  if (req.headers.authorization) {
-    const parts = req.headers.authorization.split(" ");
-    if (parts.length === 2 && parts[0] === "Bearer") {
-      token = parts[1];
-    }
-  }
-
-  if (!token) return res.status(401).json({ error: "Ingen token" });
+  const authHeader = req.headers["authorization"];
+  if (authHeader) token = authHeader.split(" ")[1];
+  if (!token && req.cookies) token = req.cookies.token;
+  if (!token) return res.status(401).json({ error: "Token saknas" });
 
   jwt.verify(token, JWT_SECRET, (err, decoded) => {
     if (err) return res.status(403).json({ error: "Ogiltig token" });
@@ -49,8 +45,9 @@ export function authenticate(req, res, next) {
 
 export function requireRole(role) {
   return (req, res, next) => {
-    if (!req.user) return res.status(401).json({ error: "Ej inloggad" });
-    if (req.user.role !== role) return res.status(403).json({ error: "Behörighet saknas" });
+    if (!req.user) return res.status(401).json({ error: "Ej autentiserad" });
+    if (req.user.role !== role)
+      return res.status(403).json({ error: "Åtkomst nekad" });
     next();
   };
 }
@@ -60,130 +57,115 @@ app.use("/auth", authRoutes);
 app.use("/characters", characterRoutes);
 app.use("/lobby", lobbyRoutes);
 
-// Health check
-app.get("/ping", (_, res) => res.json({ ok: true, msg: "Server online" }));
+app.get("/ping", (req, res) => res.json({ message: "Servern svarar!" }));
 
 // -------------------- HTTP + Socket.IO --------------------
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: allowedOrigins, credentials: true }
+  cors: {
+    origin: allowedOrigins,
+    credentials: true,
+  },
 });
 
-// -------------------- Socket.IO autentisering --------------------
-io.use((socket, next) => {
-  const token = socket.handshake.auth?.token;
-  if (!token) return next(new Error("Ingen token"));
-
-  jwt.verify(token, JWT_SECRET, (err, decoded) => {
-    if (err) return next(new Error("Ogiltig token"));
-    socket.user = decoded;
-    next();
-  });
-});
-
-// -------------------- Lobby-system --------------------
-let lobbies = {};
-// Format: { lobbyId: { players: [{name, avatarSvg, socketId, stats}], turnIndex: 0, vote: { target, voters:{} } } }
+// -------------------- Lobby-hantering --------------------
+let lobbies = {}; // { lobbyId: { players: [], turnIndex, vote } }
 
 io.on("connection", (socket) => {
   console.log("Ny anslutning:", socket.id);
 
-  // --- Gå med i lobby ---
   socket.on("joinLobby", ({ lobbyId, player }) => {
     if (!lobbies[lobbyId]) lobbies[lobbyId] = { players: [], turnIndex: 0, vote: null };
-
     lobbies[lobbyId].players = lobbies[lobbyId].players.filter(p => p.socketId !== socket.id);
     lobbies[lobbyId].players.push({ ...player, socketId: socket.id });
     socket.join(lobbyId);
     io.to(lobbyId).emit("lobbyUpdate", lobbies[lobbyId]);
   });
 
-  // --- Lämna lobby ---
   socket.on("leaveLobby", ({ lobbyId }) => {
-    if (!lobbies[lobbyId]) return;
     const lobby = lobbies[lobbyId];
+    if (!lobby) return;
     lobby.players = lobby.players.filter(p => p.socketId !== socket.id);
 
     if (lobby.vote) {
       for (const voterName of Object.keys(lobby.vote.voters)) {
-        const stillPresent = lobby.players.some(p => p.name === voterName);
-        if (!stillPresent) delete lobby.vote.voters[voterName];
+        if (!lobby.players.some(p => p.name === voterName)) delete lobby.vote.voters[voterName];
       }
       checkAndFinalizeVote(lobbyId);
     }
 
     socket.leave(lobbyId);
-    io.to(lobbyId).emit("lobbyUpdate", lobbies[lobbyId]);
+    io.to(lobbyId).emit("lobbyUpdate", lobby);
   });
 
   // --- Starta spel ---
   socket.on("startGame", ({ lobbyId }) => {
     const lobby = lobbies[lobbyId];
     if (!lobby || lobby.players.length === 0) return;
-
-    const startIndex = Math.floor(Math.random() * lobby.players.length);
-    lobby.turnIndex = startIndex;
-    const firstPlayer = lobby.players[startIndex];
-
+    lobby.turnIndex = Math.floor(Math.random() * lobby.players.length);
+    const firstPlayer = lobby.players[lobby.turnIndex];
     io.to(lobbyId).emit("gameStarted", { lobby });
     io.to(lobbyId).emit("turnUpdate", { currentPlayerName: firstPlayer.name });
   });
 
-  // --- Walk-action ---
+  // --- Action handlers (walk, fire, etc.) ---
   socket.on("walkAction", ({ lobbyId, moveAmount, statsUpdates }) => {
     const lobby = lobbies[lobbyId];
     if (!lobby) return;
-
-    if (Array.isArray(statsUpdates)) {
-      statsUpdates.forEach((update) => {
-        const player = lobby.players.find(p => p.name === update.name);
-        if (player) player.stats = update.newStats;
-      });
-    }
-
+    statsUpdates?.forEach(update => {
+      const player = lobby.players.find(p => p.name === update.name);
+      if (player) player.stats = update.newStats;
+    });
     io.to(lobbyId).emit("walkUpdate", { moveAmount, statsUpdates });
   });
 
-  // --- Make Fire-action ---
   socket.on("makeFireAction", ({ lobbyId, statsUpdates }) => {
     const lobby = lobbies[lobbyId];
     if (!lobby) return;
-
-    if (Array.isArray(statsUpdates)) {
-      statsUpdates.forEach((update) => {
-        const player = lobby.players.find((p) => p.name === update.name);
-        if (player) player.stats = update.newStats;
-      });
-    }
-
+    statsUpdates?.forEach(update => {
+      const player = lobby.players.find(p => p.name === update.name);
+      if (player) player.stats = update.newStats;
+    });
     io.to(lobbyId).emit("makeFireUpdate", { statsUpdates });
   });
 
-  // --- Nästa tur ---
+  // --- Next Turn ---
   socket.on("nextTurn", ({ lobbyId, nextPlayerName }) => {
     const lobby = lobbies[lobbyId];
     if (!lobby) return;
-
     const idx = lobby.players.findIndex(p => p.name === nextPlayerName);
     if (idx !== -1) lobby.turnIndex = idx;
     io.to(lobbyId).emit("turnUpdate", { currentPlayerName: nextPlayerName });
   });
 
-  // --- EndTurn ---
   socket.on("endTurn", ({ lobbyId }) => {
     const lobby = lobbies[lobbyId];
-    if (!lobby || lobby.players.length === 0) return;
-
+    if (!lobby || !lobby.players.length) return;
     lobby.turnIndex = (lobby.turnIndex + 1) % lobby.players.length;
-    const nextPlayer = lobby.players[lobby.turnIndex];
-
-    io.to(lobbyId).emit("turnUpdate", { currentPlayerName: nextPlayer.name });
+    io.to(lobbyId).emit("turnUpdate", { currentPlayerName: lobby.players[lobby.turnIndex].name });
     io.to(lobbyId).emit("lobbyUpdate", lobby);
   });
 
+  // --- Voting ---
+  socket.on("startVote", ({ lobbyId, targetName }) => {
+    const lobby = lobbies[lobbyId];
+    if (!lobby) return;
+    lobby.vote = { voters: {}, target: targetName };
+    io.to(lobbyId).emit("voteStarted", { target: targetName, vote: lobby.vote });
+    io.to(lobbyId).emit("lobbyUpdate", lobby);
+  });
+
+  socket.on("castVote", ({ lobbyId, voter, vote }) => {
+    const lobby = lobbies[lobbyId];
+    if (!lobby?.vote) return;
+    if (!lobby.players.some(p => p.name === voter)) return;
+    lobby.vote.voters[voter] = vote;
+    io.to(lobbyId).emit("voteUpdate", lobby.vote);
+    checkAndFinalizeVote(lobbyId);
+  });
+
   // --- Chat ---
-  socket.on("chatMessage", (msg) => {
-    const { lobbyId } = msg;
+  socket.on("chatMessage", ({ lobbyId, ...msg }) => {
     if (!lobbyId) return;
     io.to(lobbyId).emit("chatMessage", msg);
   });
@@ -191,14 +173,14 @@ io.on("connection", (socket) => {
   // --- Disconnect ---
   socket.on("disconnect", () => {
     console.log("Disconnected:", socket.id);
-    Object.keys(lobbies).forEach((lobbyId) => {
+    Object.keys(lobbies).forEach(lobbyId => {
       const lobby = lobbies[lobbyId];
+      if (!lobby) return;
       lobby.players = lobby.players.filter(p => p.socketId !== socket.id);
 
       if (lobby.vote) {
         for (const voterName of Object.keys(lobby.vote.voters)) {
-          const stillPresent = lobby.players.some(p => p.name === voterName);
-          if (!stillPresent) delete lobby.vote.voters[voterName];
+          if (!lobby.players.some(p => p.name === voterName)) delete lobby.vote.voters[voterName];
         }
         checkAndFinalizeVote(lobbyId);
       }
@@ -211,7 +193,7 @@ io.on("connection", (socket) => {
   // ---------- Helpers ----------
   function checkAndFinalizeVote(lobbyId) {
     const lobby = lobbies[lobbyId];
-    if (!lobby || !lobby.vote) return;
+    if (!lobby?.vote) return;
 
     const votersCount = Object.keys(lobby.vote.voters).length;
     const required = lobby.players.length;
@@ -241,14 +223,14 @@ io.on("connection", (socket) => {
     io.to(lobbyId).emit("lobbyUpdate", lobby);
 
     if (lobby.players.length > 0) {
-      lobby.turnIndex = lobby.turnIndex % lobby.players.length;
-      const nextPlayer = lobby.players[lobby.turnIndex];
-      if (nextPlayer) io.to(lobbyId).emit("turnUpdate", { currentPlayerName: nextPlayer.name });
+      lobby.turnIndex %= lobby.players.length;
+      io.to(lobbyId).emit("turnUpdate", { currentPlayerName: lobby.players[lobby.turnIndex].name });
     }
   }
+
 });
 
 // -------------------- Start server --------------------
 httpServer.listen(PORT, () =>
-  console.log(`\n🚀 Backend live på port ${PORT}\n🔗 Railway: https://server-production-e2e7.up.railway.app\n`)
+  console.log(`✅ Produktionsserver kör på port ${PORT}`)
 );
