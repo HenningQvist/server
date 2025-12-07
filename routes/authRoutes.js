@@ -96,21 +96,24 @@ router.post("/login", loginLimiter, async (req, res) => {
 
     const token = createToken(user);
     console.log("✅ Inloggning lyckades", { email, id: user.id });
+
+    // Skicka cookie + JSON svar
     res.cookie("token", token, {
-    httpOnly: true,
-    secure: true,        // Krävs för cookies över https (både Railway & Netlify)
-    sameSite: "None",    // Detta gör att token går att skicka från annan domän
-    maxAge: 1000 * 60 * 60, // 1h
-});
+      httpOnly: true,
+      secure: true,        // Krävs för cookies över https
+      sameSite: "None",    // Gör att cookie går att skicka från annan domän
+      maxAge: 1000 * 60 * 60, // 1h
+    });
 
-
-      .json({ message: "Inloggning lyckades", user: { id: user.id, email: user.email, role: user.role } });
+    return res.json({
+      message: "Inloggning lyckades",
+      user: { id: user.id, email: user.email, role: user.role },
+    });
   } catch (err) {
     console.error("❌ Login error:", err);
     res.status(500).json({ error: "Serverfel vid login" });
   }
 });
-
 
 // Logout
 router.post("/logout", (req, res) => {
