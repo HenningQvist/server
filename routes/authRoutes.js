@@ -96,15 +96,13 @@ router.post("/login", loginLimiter, async (req, res) => {
 
     const token = createToken(user);
     console.log("✅ Inloggning lyckades", { email, id: user.id });
-    res
-  .cookie("token", token, {
+    res.cookie("token", token, {
     httpOnly: true,
--   secure: process.env.NODE_ENV === "production",
--   sameSite: "Strict",
-+   secure: true,          // krävs för https
-+   sameSite: "None",      // måste vara None för cross-domain cookies
-    maxAge: 60 * 60 * 1000,
-  })
+    secure: true,        // Krävs för cookies över https (både Railway & Netlify)
+    sameSite: "None",    // Detta gör att token går att skicka från annan domän
+    maxAge: 1000 * 60 * 60, // 1h
+});
+
 
       .json({ message: "Inloggning lyckades", user: { id: user.id, email: user.email, role: user.role } });
   } catch (err) {
